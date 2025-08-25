@@ -1,100 +1,76 @@
-/* Código cliente en C para Windows (Winsock2) con bucle do-while */
-
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#pragma comment(lib, "Ws2_32.lib")
+#include <unistd.h>
 
 int main(void)
 {
-    WSADATA wsaData;
-    SOCKET SocketFD;
     struct sockaddr_in stSockAddr;
     int Res;
-    int n;
+    int SocketFD = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+    ssize_t n;
     
-    char mensaje[256];
+    char buffer[256];
     char respuestaServidor[256];
 
-    // 1. Inicializar Winsock
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        fprintf(stderr, "WSAStartup falló. Código de error: %d\n", WSAGetLastError());
-        return 1;
-    }
-
-    // 2. Crear el socket
-    SocketFD = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (INVALID_SOCKET == SocketFD)
-    {
-        fprintf(stderr, "No se pudo crear el socket. Código de error: %d\n", WSAGetLastError());
-        WSACleanup();
-        return 1;
+    if (-1 == SocketFD) {
+        perror("cannot create socket");
+        exit(EXIT_FAILURE);
     }
 
     memset(&stSockAddr, 0, sizeof(struct sockaddr_in));
+
     stSockAddr.sin_family = AF_INET;
-    stSockAddr.sin_port = htons(45000);
-    
-    Res = inet_pton(AF_INET, "172.16.164.132", &stSockAddr.sin_addr);
-    if (Res <= 0) 
-    {
-        fprintf(stderr, "Error en inet_pton. Código de error: %d\n", WSAGetLastError());
-        closesocket(SocketFD);
-        WSACleanup();
-        return 1;
+    stSockAddr.sin_port = htons(1100);
+    // IMPORTANTE: Usar "127.0.0.1" si el servidor está en la misma máquina
+    Res = inet_pton(AF_INET, "127.0.0.1", &stSockAddr.sin_addr);
+
+    if (Res <= 0) {
+        perror("inet_pton failed");
+        close(SocketFD);
+        exit(EXIT_FAILURE);
     }
 
-    // 3. Conectar al servidor
-    if (SOCKET_ERROR == connect(SocketFD, (const struct sockaddr *)&stSockAddr, sizeof(struct sockaddr_in)))
-    {
-        fprintf(stderr, "Conexión fallida. Código de error: %d\n", WSAGetLastError());
-        closesocket(SocketFD);
-        WSACleanup();
-        return 1;
+    if (-1 == connect(SocketFD, (const struct sockaddr *)&stSockAddr, sizeof(struct sockaddr_in))) {
+        perror("connect failed");
+        close(SocketFD);
+        exit(EXIT_FAILURE);
     }
-    
-    // 4. Bucle para enviar y recibir mensajes
+
+    printf("Conectado al servidor. Escribe 'chau' para salir.\n");
+
     do {
-        printf("Escribe el mensaje (o 'chau' para salir): ");
-        fgets(mensaje, sizeof(mensaje), stdin);
         
-        // Eliminar el salto de línea que añade fgets
-        mensaje[strcspn(mensaje, "\n")] = 0;
+        printf("Escribe el mensaje: ");
+        fgets(buffer, sizeof(buffer), stdin);
+        buffer[strcspn(buffer, "\n")] = 0;
 
-        // Si el mensaje es "chau", no enviar y salir del bucle
-        if (strcmp(mensaje, "chau") == 0) {
-            break;
+        n = write(SocketFD, buffer, strlen(buffer));
+        if (n < 0) {
+            perror("ERROR al escribir en el socket");
+            break; 
         }
 
-        // Enviar el mensaje
-        n = send(SocketFD, mensaje, strlen(mensaje), 0);
-        if (n == SOCKET_ERROR) {
-            fprintf(stderr, "Error al enviar datos. Código de error: %d\n", WSAGetLastError());
-            break;
-        }
-
-        // Limpiar buffer y recibir la respuesta del servidor
-        memset(respuestaServidor, 0, sizeof(respuestaServidor));
-        n = recv(SocketFD, respuestaServidor, sizeof(respuestaServidor) - 1, 0);
-        if (n > 0) {
+        if (strcmp(buffer, "chau") != 0) {
+            bzero(respuestaServidor, 256);
+            n = read(SocketFD, respuestaServidor, 255);
+            if (n < 0) {
+                perror("ERROR al leer del socket");
+                break; // Salir si hay error
+            }
             printf("Respuesta del servidor: [%s]\n", respuestaServidor);
-        } else if (n == 0) {
-            printf("Conexión cerrada por el servidor.\n");
-            break;
-        } else {
-            fprintf(stderr, "Error al recibir datos. Código de error: %d\n", WSAGetLastError());
-            break;
         }
 
-    } while (1);
+    } while (strcmp(buffer, "chau") != 0);
 
-    // 5. Cerrar la conexión
-    shutdown(SocketFD, SD_BOTH);
-    closesocket(SocketFD);
-    WSACleanup();
+    printf("Desconectando...\n");
+    
+    shutdown(SocketFD, SHUT_RDWR);
+    close(SocketFD);
 
     return 0;
 }
