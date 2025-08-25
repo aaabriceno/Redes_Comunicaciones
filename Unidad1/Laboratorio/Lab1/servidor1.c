@@ -1,95 +1,67 @@
-/* Servidor en C para Windows (Winsock2) - Corregido para múltiples mensajes */
-
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
-#pragma comment(lib, "Ws2_32.lib")
-
-int main(void)
-{
-    WSADATA wsaData;
-    SOCKET SocketFD, ConnectFD;
+int main(void) {
     struct sockaddr_in stSockAddr;
+    int SocketFD = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
     char buffer[256];
     int n;
 
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        fprintf(stderr, "WSAStartup falló. Código de error: %d\n", WSAGetLastError());
-        return 1;
-    }
-
-    SocketFD = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (INVALID_SOCKET == SocketFD)
-    {
-        fprintf(stderr, "No se pudo crear el socket. Código de error: %d\n", WSAGetLastError());
-        WSACleanup();
-        return 1;
+    if(-1 == SocketFD) {
+        perror("can not create socket");
+        exit(EXIT_FAILURE);
     }
 
     memset(&stSockAddr, 0, sizeof(struct sockaddr_in));
     stSockAddr.sin_family = AF_INET;
-    stSockAddr.sin_port = htons(45000);
-    stSockAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    stSockAddr.sin_port = htons(1100);
+    stSockAddr.sin_addr.s_addr = INADDR_ANY;
 
-    if (SOCKET_ERROR == bind(SocketFD, (const struct sockaddr *)&stSockAddr, sizeof(struct sockaddr_in)))
-    {
-        fprintf(stderr, "error bind failed. Código de error: %d\n", WSAGetLastError());
-        closesocket(SocketFD);
-        WSACleanup();
-        return 1;
+    if(-1 == bind(SocketFD,(const struct sockaddr *)&stSockAddr, sizeof(struct sockaddr_in))) {
+        perror("error bind failed");
+        close(SocketFD);
+        exit(EXIT_FAILURE);
     }
 
-    if (SOCKET_ERROR == listen(SocketFD, 10))
-    {
-        fprintf(stderr, "error listen failed. Código de error: %d\n", WSAGetLastError());
-        closesocket(SocketFD);
-        WSACleanup();
-        return 1;
+    if(-1 == listen(SocketFD, 10)) {
+        perror("error listen failed");
+        close(SocketFD);
+        exit(EXIT_FAILURE);
     }
 
-    printf("Servidor esperando conexiones...\n");
-
-    for(;;) // Bucle principal para aceptar nuevas conexiones de diferentes clientes
-    {
-        ConnectFD = accept(SocketFD, NULL, NULL);
-        if (INVALID_SOCKET == ConnectFD)
-        {
-            fprintf(stderr, "error accept failed. Código de error: %d\n", WSAGetLastError());
-            closesocket(SocketFD);
-            WSACleanup();
-            return 1;
+    for(;;) {
+        printf("Esperando una nueva conexión...\n");
+        int ConnectFD = accept(SocketFD, NULL, NULL);
+        if(0 > ConnectFD) {
+            perror("error accept failed");
+            continue; 
         }
+        
+        printf("Cliente conectado. Esperando mensajes...\n");
+        while((n = read(ConnectFD, buffer, 255)) > 0) {
+            buffer[n] = '\0';
+            printf("Mensaje recibido: [%s]\n", buffer);
 
-        printf("Conexión establecida con un cliente.\n");
-
-        // Bucle interno para recibir múltiples mensajes del MISMO cliente
-        while (1) {
-            memset(buffer, 0, sizeof(buffer));
-            n = recv(ConnectFD, buffer, sizeof(buffer) - 1, 0);
-
-            if (n <= 0) { // Si n es 0, la conexión fue cerrada por el cliente. Si es < 0, hay un error.
-                printf("Conexión cerrada por el cliente o error.\n");
-                break; // Salir del bucle interno
-            }
-
-            printf("ESTE ES TU MENSAJE: [%s]\n", buffer);
-
-            n = send(ConnectFD, "I got your message", 18, 0);
-            if (n == SOCKET_ERROR) {
-                fprintf(stderr, "ERROR writing to socket. Código de error: %d\n", WSAGetLastError());
-                break; // Salir del bucle interno
+            n = write(ConnectFD, "Mensaje recibido", 16);
+            if (n < 0) {
+                perror("ERROR al escribir en el socket");
+                break;
             }
         }
         
-        // Cerrar la conexión actual para volver a aceptar una nueva
-        shutdown(ConnectFD, SD_BOTH);
-        closesocket(ConnectFD);
-    }
+        if (n == 0) {
+            printf("Cliente se ha desconectado.\n");
+        } else if (n < 0) {
+            perror("ERROR al leer del socket");
+        }
 
-    closesocket(SocketFD);
-    WSACleanup();
+        close(ConnectFD);
+    }
+    close(SocketFD);
     return 0;
 }
