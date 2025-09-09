@@ -16,8 +16,6 @@ using namespace std;
 
 #define PORT 45000
 #define SERVER_IP "127.0.0.1"
-#define BUFFER_SIZE 256
-
 
 string global_nickname;
 
@@ -27,9 +25,25 @@ string formatLength(size_t len, int cifras) {
     return ss.str();
 }
 
+int get_len(int clientSock, int n_prot){
+    char readed[4];
+    read(clientSock, readed, n_prot);
+    readed[n_prot] = '\0';
+    return atoi(readed);
+}
+
+string read_text(int clientSock, int len){
+    char readed[255];
+    read(clientSock, readed, len);
+    readed[len] = '\0';
+    return string(readed);
+}
+
+
+
 void registerNickname(int sockfd){
     int n;
-    char buffer[BUFFER_SIZE];
+    char buffer[2];
 
     struct timeval tv;
     tv.tv_sec = 1;   // 1 segundo de espera
@@ -37,23 +51,27 @@ void registerNickname(int sockfd){
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
     
     while (1) {
-        cout << "Ingresa tu nombre: ";
+        cout << "Enter your Nickname: ";
         getline(cin, global_nickname);
     
         string nickMsg = string("n") + formatLength(global_nickname.size(), 2) + global_nickname;
         write(sockfd, nickMsg.c_str(), nickMsg.size());
+        cout<<" /nEnviando  al servidor ==> "<<nickMsg<<endl;
     
-        n = read(sockfd, buffer, BUFFER_SIZE - 1);
+        n = read(sockfd, buffer, 1);
     
         if (n <= 0) {
-            cout << "\nUsuario accepted!\n\n";
+            cout << "\nNickname accepted!\n\n";
             break;
         }
+
+        cout<<buffer<<endl;
     
         buffer[n] = '\0';
         if (buffer[0] == 'E') {
-            int len = stoi(string(buffer + 1, 3));
-            string msg(buffer + 4, len);
+            int len = get_len(sockfd, 3);
+            string msg = read_text(sockfd, len);
+            cout<<buffer<<formatLength(len,3)<<msg<<endl;
             cout << "\nError msg => " << msg << "\n\n";
         }
     }
@@ -65,56 +83,51 @@ void registerNickname(int sockfd){
 }
 
 void readThread(int socketConn) {
-    char buffer[BUFFER_SIZE];
+    char buffer[2];
     int n;
     while (true) {
-        n = read(socketConn, buffer, BUFFER_SIZE - 1);
+        string recived = "";
+        n = read(socketConn, buffer, 1);
         if (n <= 0) {
             cout << "\n[Server disconnected]\n";
             break;
         }
+        recived += buffer;
         buffer[n] = '\0';
 
         if (buffer[0] == 'L') {
-            int len = stoi(string(buffer + 1, 2));
-            int begin=3, i=0; 
+            int len = get_len(socketConn, 2);
+            recived += formatLength(len,2);
             cout<<endl<<"\n ---- Current Users ----\n";
-            while(len > i++){
-                int len_nick = stoi(string(buffer + begin, 2));
-                string nick(buffer + begin + 2, len_nick);
-                begin = begin + 2 + len_nick;
+            for(int i=0; i<len; i++){
+                int len_nick = get_len(socketConn, 2);
+                string nick = read_text(socketConn, len_nick);
+                recived += formatLength(len_nick,2) + nick;
                 cout<<" - "<<nick;
                 if(global_nickname==nick) cout<<"(you)";
                 cout<<endl;
             }
             cout<<endl;
-            //cout <<nick << endl;
-
-
-        } else if (buffer[0] == 'T') {
-            int len = stoi(string(buffer + 1, 2));
-            string from(buffer + 3, len);
-            int len_msg = stoi(string(buffer + 3 + len, 3));
-            string msg(buffer + 6 + len, len_msg);
-            cout <<"\n\n["<< from<<": "<< msg <<"]\n"<< endl;
-
-
-        } else if (buffer[0] == 'M') {
-            int len = stoi(string(buffer + 1, 2));
-            string from(buffer + 3, len);
-            int len_msg = stoi(string(buffer + 3 + len, 3));
-            string msg(buffer + 6 + len, len_msg);
-            cout <<"\n\nGLOBAL MSG ["<< from<<": "<< msg <<"]\n"<< endl; 
             
-            
-        } else if (buffer[0] == 'X') {
-            cout << "\n[Server end chat]\n";
-            break;
+            cout<<recived<<endl;
+
+        } else if (buffer[0] == 'T' || buffer[0] == 'M') {
+            int len = get_len(socketConn, 2);
+            string from = read_text(socketConn, len);
+            int len_msg = get_len(socketConn, 3);
+            string msg = read_text(socketConn, len_msg);
+
+            cout<<recived<<formatLength(len,2)<<from<<formatLength(len_msg,3)<<msg<<endl;
+
+            cout<<"\n\n";
+            if (buffer[0] == 'M') cout<<"GLOBAL MSG ";
+            cout <<"["<< from<<": "<< msg <<"]\n"<< endl;
 
 
         } else if(buffer[0]=='E') {
-            int len = stoi(string(buffer + 1, 3));
-            string msg(buffer + 4, len);
+            int len = get_len(socketConn, 3);
+            string msg = read_text(socketConn, len);
+            cout<<recived<<formatLength(len,3)<<msg<<endl;
             cout <<"\n\nError msg => "<< msg << "\n\n";
         }
 
@@ -154,8 +167,9 @@ int main(void) {
         cin.ignore(numeric_limits<streamsize>::max(), '\n');
         
         if (option == 4) {
-            char msg = 'X';
+            char msg = 'x';
             n = write(sockfd, &msg, 1);
+            cout<<" /nEnviando  al servidor ==> "<<msg<<endl;
             break;
 
 
@@ -164,6 +178,7 @@ int main(void) {
             getline(cin, buf);
             string msg = string("m") + formatLength(buf.size(),3) + buf;
             n = write(sockfd, msg.c_str(), msg.size());
+            cout<<" /nEnviando  al servidor ==> "<<msg<<endl;
 
 
         } else if(option == 2){
@@ -175,11 +190,13 @@ int main(void) {
             string msg = string("t") + formatLength(send_to.size(),2) + send_to 
             + formatLength(buf.size(),3) + buf;
             n = write(sockfd, msg.c_str(), msg.size());
+            cout<<" /nEnviando  al servidor ==> "<<msg<<endl;
 
 
         } else if(option==1){
             char msg = 'l';
             n = write(sockfd, &msg, 1);
+            cout<<" /nEnviando  al servidor ==> "<<msg<<endl;
         }
         
     } while (true);

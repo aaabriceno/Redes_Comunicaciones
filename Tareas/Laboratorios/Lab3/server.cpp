@@ -18,7 +18,6 @@ using namespace std;
 
 
 #define PORT 45000
-#define BUFFER_SIZE 256
 string global_nickname;
 map<string, int> current_users;
 map<int, string> current_users_ids;
@@ -30,29 +29,47 @@ string formatLength(size_t len, int cifras) {
     return ss.str();
 }
 
+int get_len(int clientSock, int n_prot){
+    char readed[4];
+    read(clientSock, readed, n_prot);
+    readed[n_prot] = '\0';
+    return atoi(readed);
+}
+
+string read_text(int clientSock, int len){
+    char readed[255];
+    read(clientSock, readed, len);
+    readed[len] = '\0';
+    return string(readed);
+}
+
 void newClientThread(int clientSock) {
-    char buffer[BUFFER_SIZE];
+    char buffer[2];
     int n;
 
     while (true) {
-        n = read(clientSock, buffer, BUFFER_SIZE - 1);
+        string recieved = "";
+        n = read(clientSock, buffer, 1);
         if (n <= 0) {
             cout << "\n[Client disconnected]\n";
             break;
         }
+
+        recieved += buffer;
         buffer[n] = '\0';
 
-        cout<<buffer<<endl;
-
         if (buffer[0] == 'n') {
-            int len = stoi(string(buffer + 1, 2));
-            string nick(buffer + 3, len);
-            //cout<<nick<<endl;
+            int len = get_len(clientSock, 2);
+            string nick = read_text(clientSock, len);
+
+            cout<<recieved<<formatLength(len,2)<<nick<<endl;
+
             auto it = current_users.find(nick);
             if (it != current_users.end()){
                 string msg = "The nickname already exists.";
                 string msg_error = string("E") + formatLength(msg.size(),3) + msg;
                 write(clientSock, msg_error.c_str(), msg_error.size());
+                cout<<" /nEnviando  al cliente ==> "<<msg_error<<endl;
             }
             else{
                 current_users[nick] = clientSock;
@@ -63,56 +80,60 @@ void newClientThread(int clientSock) {
         }else if (buffer[0] == 'm') {
             string from = current_users_ids[clientSock];
 
-            int len_msg = stoi(string(buffer + 1, 3));
-            string msg(buffer + 4, len_msg);
+            int len_msg = get_len(clientSock, 3); 
+            string msg = read_text(clientSock, len_msg);
+
+            cout<<recieved<<formatLength(len_msg,3)<<msg<<endl;
 
             for(auto const &u : current_users){
                 if (u.first != from){
                     string msg_list = string("M") + formatLength(from.size(),2) + from
                     + formatLength(msg.size(),3) + msg;
                     write(u.second, msg_list.c_str(), msg_list.size());
+                    cout<<" /nEnviando  al cliente ==> "<<msg_list<<endl;
                 }
             }
             
 
         } else if (buffer[0] == 't') {
-            int len = stoi(string(buffer + 1, 2));
-            string to_send(buffer + 3, len);
+            int len = get_len(clientSock, 2);
+            string to_send = read_text(clientSock, len);
 
-            int len_msg = stoi(string(buffer + 3 + len, 3));
-            string msg(buffer + 6 + len, len_msg);
+            int len_msg = get_len(clientSock, 3);
+            string msg = read_text(clientSock, len_msg);
 
             string from = current_users_ids[clientSock];
+
+            cout<<recieved<<formatLength(len,2)<<to_send<<formatLength(len_msg,3)<<msg<<endl;
 
             auto it = current_users.find(to_send);
             if (it == current_users.end()){
                 string msg = "The user nickname don\'t exist.";
                 string msg_error = string("E") + formatLength(msg.size(),3) + msg;
                 write(clientSock, msg_error.c_str(), msg_error.size());
+                cout<<" /nEnviando  al cliente ==> "<<msg_error<<endl;
             }
             else{
                 string msg_to_send = string("T") + formatLength(from.size(),2) + from 
                 + formatLength(msg.size(),3) + msg;
                 write(current_users[to_send], msg_to_send.c_str(), msg_to_send.size());
+                cout<<" /nEnviando  al cliente ==> "<<msg_to_send<<endl;
             }
 
 
         } else if (buffer[0] == 'l') {
+            cout<<recieved<<endl;
             string msg = "";
             for(auto const &u : current_users){
                 msg += formatLength(u.first.size(), 2) + u.first;
             }
             string msg_list = string("L") + formatLength(current_users.size(),2) + msg;
             write(clientSock, msg_list.c_str(), msg_list.size());
+            cout<<" /nEnviando  al cliente ==> "<<msg_list<<endl;
 
 
-        } else if (buffer[0] == 'X') {
-            // int len = stoi(string(buffer + 1, 2));
-            // string nick(buffer + 3, len);
-
-            // auto it = current_users.find(nick);
-            // current_users.erase(nick);
-
+        } else if (buffer[0] == 'x') {
+            cout<<recieved<<endl;
             for (auto it = current_users.begin(); it != current_users.end(); ++it) {
                 if (it->second == clientSock) {
                     cout << "\n[Removing user: " << it->first <<"]"<< endl;
@@ -174,4 +195,3 @@ int main(void) {
     close(serverSock);
     return 0;
 }
-
