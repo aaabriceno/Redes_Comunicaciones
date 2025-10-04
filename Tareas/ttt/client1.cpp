@@ -15,7 +15,7 @@
 #include <limits>
 #include <vector> 
 #include <mutex>
-//#include "claseSala.cpp"
+#include "ttt.cpp"
 
 using namespace std;
 
@@ -23,28 +23,6 @@ using namespace std;
 #define SERVER_IP "127.0.0.1"
 
 string global_nickname;
-
-mutex tttMutex;
-char tttRole = 'S';
-char tttTurn = 'O';
-string tttBoardState = "123456789";
-bool tttGameActive = false;
-bool tttHostWaiting = false;
-bool tttInviteAvailable = false;
-string tttInviteNick;
-
-void printTTTBoard(const string& board) {
-    cout << "\nTablero TTT:" << endl;
-    for (size_t i = 0; i < board.size(); ++i) {
-        char display = (board[i] == 'O' || board[i] == 'X') ? board[i] : static_cast<char>('1' + i);
-        cout << " " << display;
-        if ((i + 1) % 3 == 0) {
-            cout << "\n";
-        } else {
-            cout << " |";
-        }
-    }
-}
 
 void showMenu() {
     cout << "\n===> Menú ===>\n"
@@ -226,13 +204,13 @@ void readThread(int socketConn) {
             int r = read(socketConn, &roleChar, 1);
             if (r == 1) {
                 {
-                    lock_guard<mutex> lock(tttMutex);
-                    tttRole = roleChar;
+                    lock_guard<mutex> lock(tttMutexClient);
+                    tttRol = roleChar;
                     if (roleChar != 'O') {
-                        tttHostWaiting = false;
+                        tttHostEsperando = false;
                     }
                     if (roleChar == 'S') {
-                        tttGameActive = false;
+                        tttJuegoActivo = false;
                     }
                 }
                 if (roleChar == 'O') {
@@ -250,8 +228,8 @@ void readThread(int socketConn) {
             int r = read(socketConn, &flag, 1);
             if (r == 1) {
                 {
-                    lock_guard<mutex> lock(tttMutex);
-                    tttHostWaiting = (flag == '1');
+                    lock_guard<mutex> lock(tttMutexClient);
+                    tttHostEsperando = (flag == '1');
                 }
                 if (flag == '1') {
                     cout << "\n[TTT] Esperando a que otro usuario acepte la partida." << endl;
@@ -264,11 +242,11 @@ void readThread(int socketConn) {
         else if (buffer[0] == 'B') {
             string board = read_text(socketConn, 9);
             {
-                lock_guard<mutex> lock(tttMutex);
-                tttBoardState = board;
+                lock_guard<mutex> lock(tttMutexClient);
+                tttEstadoTablero = board;
             }
             cout << "\n[TTT] Actualización del tablero.";
-            printTTTBoard(board);
+            printTTTtablero(board);
         }
 
         else if (buffer[0] == 'U') {
@@ -277,10 +255,10 @@ void readThread(int socketConn) {
             if (r == 1) {
                 char roleCopy;
                 {
-                    lock_guard<mutex> lock(tttMutex);
-                    tttTurn = turnChar;
-                    tttGameActive = true;
-                    roleCopy = tttRole;
+                    lock_guard<mutex> lock(tttMutexClient);
+                    tttTurno = turnChar;
+                    tttJuegoActivo = true;
+                    roleCopy = tttRol;
                 }
                 if (roleCopy == turnChar) {
                     cout << "\n[TTT] Es tu turno (" << turnChar << "). Usa la opción 5 para jugar." << endl;
@@ -294,10 +272,10 @@ void readThread(int socketConn) {
             int len = get_len(socketConn, 2);
             string challenger = read_text(socketConn, len);
             {
-                lock_guard<mutex> lock(tttMutex);
+                lock_guard<mutex> lock(tttMutexClient);
                 if (challenger != global_nickname) {
-                    tttInviteAvailable = true;
-                    tttInviteNick = challenger;
+                    tttInvitacionDisponible = true;
+                    tttInvitarNick = challenger;
                 }
             }
             cout << "\n[TTT] " << challenger << " busca oponente. Usa la opción 5 para responder." << endl;
@@ -308,13 +286,14 @@ void readThread(int socketConn) {
             int r = read(socketConn, &reason, 1);
             if (r == 1) {
                 {
-                    lock_guard<mutex> lock(tttMutex);
-                    tttInviteAvailable = false;
+                    lock_guard<mutex> lock(tttMutexClient);
+                    tttInvitacionDisponible = false;
                 }
                 if (reason == 'A') {
                     cout << "\n[TTT] Convocatoria atendida." << endl;
                 } else {
                     cout << "\n[TTT] Convocatoria cancelada." << endl;
+                    showMenu();
                 }
             }
         }
@@ -344,8 +323,8 @@ void readThread(int socketConn) {
             int r = read(socketConn, &winner, 1);
             if (r == 1) {
                 {
-                    lock_guard<mutex> lock(tttMutex);
-                    tttGameActive = false;
+                    lock_guard<mutex> lock(tttMutexClient);
+                    tttJuegoActivo = false;
                 }
                 cout << "\n[TTT] ¡Ganó " << winner << "!" << endl;
             }
@@ -353,8 +332,8 @@ void readThread(int socketConn) {
 
         else if (buffer[0] == 'D') {
             {
-                lock_guard<mutex> lock(tttMutex);
-                tttGameActive = false;
+                lock_guard<mutex> lock(tttMutexClient);
+                tttJuegoActivo = false;
             }
             cout << "\n[TTT] La partida terminó en empate." << endl;
         }
@@ -364,12 +343,13 @@ void readThread(int socketConn) {
             int r = read(socketConn, &departed, 1);
             if (r == 1) {
                 {
-                    lock_guard<mutex> lock(tttMutex);
-                    tttGameActive = false;
-                    tttHostWaiting = false;
-                    tttInviteAvailable = false;
+                    lock_guard<mutex> lock(tttMutexClient);
+                    tttJuegoActivo = false;
+                    tttHostEsperando = false;
+                    tttInvitacionDisponible = false;
                 }
                 cout << "\n[TTT] La partida se canceló. El jugador " << departed << " se desconectó." << endl;
+                showMenu();
             }
         }
 
@@ -378,13 +358,13 @@ void readThread(int socketConn) {
             int r = read(socketConn, &reason, 1);
             if (r == 1) {
                 {
-                    lock_guard<mutex> lock(tttMutex);
-                    tttGameActive = false;
-                    tttHostWaiting = false;
-                    tttInviteAvailable = false;
-                    tttRole = 'S';
-                    tttTurn = 'O';
-                    tttBoardState = "123456789";
+                    lock_guard<mutex> lock(tttMutexClient);
+                    tttJuegoActivo = false;
+                    tttHostEsperando = false;
+                    tttInvitacionDisponible = false;
+                    tttRol = 'S';
+                    tttTurno = 'O';
+                    tttEstadoTablero = "123456789";
                 }
                 if (reason == 'W') {
                     cout << "\n[TTT] La partida finalizó. Espera una nueva convocatoria." << endl;
@@ -553,14 +533,14 @@ int main(void) {
             string inviteNickCopy;
 
             {
-                lock_guard<mutex> lock(tttMutex);
-                roleCopy = tttRole;
-                turnCopy = tttTurn;
-                boardCopy = tttBoardState;
-                activeCopy = tttGameActive;
-                hostWaitingCopy = tttHostWaiting;
-                inviteCopy = tttInviteAvailable;
-                inviteNickCopy = tttInviteNick;
+                lock_guard<mutex> lock(tttMutexClient);
+                roleCopy = tttRol;
+                turnCopy = tttTurno;
+                boardCopy = tttEstadoTablero;
+                activeCopy = tttJuegoActivo;
+                hostWaitingCopy = tttHostEsperando;
+                inviteCopy = tttInvitacionDisponible;
+                inviteNickCopy = tttInvitarNick;
             }
 
             if (roleCopy == 'O' && hostWaitingCopy) {
@@ -574,8 +554,8 @@ int main(void) {
                     char acceptMsg = 'a';
                     write(sockfd, &acceptMsg, 1);
                     {
-                        lock_guard<mutex> lock(tttMutex);
-                        tttInviteAvailable = false;
+                        lock_guard<mutex> lock(tttMutexClient);
+                        tttInvitacionDisponible = false;
                     }
                     cout << "[TTT] Has enviado la aceptación." << endl;
                 } else {
@@ -589,7 +569,7 @@ int main(void) {
             }
             else if (activeCopy && (roleCopy == 'O' || roleCopy == 'X')) {
                 cout << "\n[TTT] Tu rol actual: " << roleCopy << endl;
-                printTTTBoard(boardCopy);
+                printTTTtablero(boardCopy);
 
                 if (turnCopy != roleCopy) {
                     cout << "[TTT] Turno actual: " << turnCopy << ". Espera tu turno." << endl;
@@ -615,7 +595,7 @@ int main(void) {
             }
             else if (activeCopy) {
                 cout << "\n[TTT] Partida en curso. Estás en modo espectador." << endl;
-                printTTTBoard(boardCopy);
+                printTTTtablero(boardCopy);
             }
             else {
                 cout << "\n[TTT] No hay partida activa. Usa esta opción para iniciar una convocatoria." << endl;
