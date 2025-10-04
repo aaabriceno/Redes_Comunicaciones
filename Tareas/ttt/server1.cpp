@@ -17,6 +17,7 @@
 #include <set>
 #include <array>
 #include <mutex>
+#include "ttt.cpp"
 
 using namespace std;
 
@@ -24,92 +25,14 @@ using namespace std;
 map<string, int> current_users;
 map<int, string> current_users_ids;
 
-struct TicTacToeGame {
-    int playerO = -1;
-    int playerX = -1;
-    std::set<int> spectators;
-    std::array<char, 9> board{};
-    char turn = 'O';
-    bool active = false;
-    bool waitingForOpponent = false;
-    int challengerSock = -1;
-
-    TicTacToeGame() { resetBoard(); }
-
-    void resetBoard() {
-        for (size_t i = 0; i < board.size(); ++i) {
-            board[i] = static_cast<char>('1' + i);
-        }
-        turn = 'O';
-    }
-
-    void resetSession() {
-        playerO = -1;
-        playerX = -1;
-        challengerSock = -1;
-        waitingForOpponent = false;
-        active = false;
-        resetBoard();
-        spectators.clear();
-    }
-};
-
-std::mutex tttMutex;
-TicTacToeGame tttGame;
-
-vector<int> gatherTTTRecipientsLocked(const TicTacToeGame& game) {
-    vector<int> recipients;
-    if (game.playerO != -1) {
-        recipients.push_back(game.playerO);
-    }
-    if (game.playerX != -1 && game.playerX != game.playerO) {
-        recipients.push_back(game.playerX);
-    }
-    recipients.insert(recipients.end(), game.spectators.begin(), game.spectators.end());
-    return recipients;
-}
-
-bool tttCheckWin(const std::array<char, 9>& board, char p) {
-    const int w[8][3] = {
-        {0, 1, 2}, {3, 4, 5}, {6, 7, 8},
-        {0, 3, 6}, {1, 4, 7}, {2, 5, 8},
-        {0, 4, 8}, {2, 4, 6}
-    };
-    for (const auto& combo : w) {
-        if (board[combo[0]] == p && board[combo[1]] == p && board[combo[2]] == p) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool tttBoardFull(const std::array<char, 9>& board) {
-    for (char cell : board) {
-        if (cell != 'O' && cell != 'X') {
-            return false;
-        }
-    }
-    return true;
-}
-
-std::string tttBoardString(const std::array<char, 9>& board) {
-    return std::string(board.begin(), board.end());
-}
-
-void tttBroadcast(const vector<int>& recipients, const std::string& msg) {
-    for (int sock : recipients) {
-        write(sock, msg.c_str(), msg.size());
-    }
-}
-
-void removeFromTTT(int clientSock) {
-    vector<int> recipients;
+void eliminarDeTTT(int clientSock) {
+    vector<int> destinatarios;
     char departedRole = '?';
     bool notify = false;
     bool cancelSearch = false;
 
     {
-        lock_guard<mutex> lock(tttMutex);
+        lock_guard<mutex> lock(tttMutexServer);
 
         if (tttGame.playerO == clientSock) {
             tttGame.playerO = -1;
@@ -121,30 +44,30 @@ void removeFromTTT(int clientSock) {
                 tttGame.challengerSock = -1;
             }
             tttGame.active = false;
-            tttGame.resetBoard();
+            tttGame.resetearTablero();
         } else if (tttGame.playerX == clientSock) {
             tttGame.playerX = -1;
             departedRole = 'X';
             notify = tttGame.active;
             tttGame.active = false;
-            tttGame.resetBoard();
+            tttGame.resetearTablero();
         }
 
-        tttGame.spectators.erase(clientSock);
+        tttGame.espectadores.erase(clientSock);
 
         if (notify) {
-            recipients = gatherTTTRecipientsLocked(tttGame);
-            tttGame.resetSession();
+            destinatarios = reunirTTTDestinatariosBloqueados(tttGame);
+            tttGame.resetearSesion();
         }
         if (tttGame.challengerSock == clientSock) {
             cancelSearch = true;
-            tttGame.resetSession();
+            tttGame.resetearSesion();
         }
     }
 
-    if (notify && !recipients.empty()) {
+    if (notify && !destinatarios.empty()) {
         string msg = string("Q") + departedRole;
-        tttBroadcast(recipients, msg);
+        tttBroadcast(destinatarios, msg);
     }
     if (cancelSearch) {
         string cancelMsg = string("C") + 'Q';
@@ -154,20 +77,20 @@ void removeFromTTT(int clientSock) {
     }
 }
 
-string formatLength(size_t len, int cifras) {
+string longitudFormato(size_t len, int cifras) {
     stringstream ss;
     ss << setw(cifras) << setfill('0') << len;
     return ss.str();
 }
 
-int get_len(int clientSock, int n_prot){
+int obtenerLongitud(int clientSock, int n_prot){
     char readed[16];
     read(clientSock, readed, n_prot);
     readed[n_prot] = '\0';
     return atoi(readed);
 }
 
-string read_text(int clientSock, int len){
+string leerTexto(int clientSock, int len){
     char *readed = new char[len+1];
     read(clientSock, readed, len);
     readed[len] = '\0';
@@ -183,7 +106,7 @@ void newClientThread(int clientSock) {
     while (true) {
         n = read(clientSock, buffer, 1);
         if (n <= 0) {
-            removeFromTTT(clientSock);
+            eliminarDeTTT(clientSock);
             if(current_users_ids.count(clientSock)){
                 cout << "\n[Cliente desconectado: " << current_users_ids[clientSock] << "]" << endl;
                 current_users.erase(current_users_ids[clientSock]);
@@ -195,13 +118,13 @@ void newClientThread(int clientSock) {
         string command_char(buffer); 
 
         if (buffer[0] == 'n') {
-            int len = get_len(clientSock, 2);
-            string nick = read_text(clientSock, len);
-            cout << " Recibido del cliente ==> " << command_char << formatLength(len,2) << nick << endl; // <-- LÍNEA AÑADIDA
+            int len = obtenerLongitud(clientSock, 2);
+            string nick = leerTexto(clientSock, len);
+            cout << " Recibido del cliente ==> " << command_char << longitudFormato(len,2) << nick << endl; // <-- LÍNEA AÑADIDA
 
             if (current_users.count(nick)){
                 string msg = "Ese nickname ya existe.";
-                string msg_error = string("E") + formatLength(msg.size(),3) + msg;
+                string msg_error = string("E") + longitudFormato(msg.size(),3) + msg;
                 cout << " Enviando al cliente ==> " << msg_error << endl; // <-- LÍNEA AÑADIDA
                 write(clientSock, msg_error.c_str(), msg_error.size());
             } else {
@@ -213,13 +136,13 @@ void newClientThread(int clientSock) {
 
         else if (buffer[0] == 'm') {
             string from = current_users_ids[clientSock];
-            int len_msg = get_len(clientSock, 3); 
-            string msg = read_text(clientSock, len_msg);
-            cout << " Recibido del cliente ==> " << command_char << formatLength(len_msg,3) << msg << endl; // <-- LÍNEA AÑADIDA
+            int len_msg = obtenerLongitud(clientSock, 3); 
+            string msg = leerTexto(clientSock, len_msg);
+            cout << " Recibido del cliente ==> " << command_char << longitudFormato(len_msg,3) << msg << endl; // <-- LÍNEA AÑADIDA
             
             for(auto const &u : current_users){
                 if (u.first != from){
-                    string msg_list = string("M") + formatLength(from.size(),2) + from + formatLength(msg.size(),3) + msg;
+                    string msg_list = string("M") + longitudFormato(from.size(),2) + from + longitudFormato(msg.size(),3) + msg;
                     cout << " Enviando al cliente (" << u.first << ") ==> " << msg_list << endl; // <-- LÍNEA AÑADIDA
                     write(u.second, msg_list.c_str(), msg_list.size());
                 }
@@ -227,21 +150,21 @@ void newClientThread(int clientSock) {
         } 
         
         else if (buffer[0] == 't') {
-            int len = get_len(clientSock, 2);
-            string to_send = read_text(clientSock, len);
-            int len_msg = get_len(clientSock, 3);
-            string msg = read_text(clientSock, len_msg);
+            int len = obtenerLongitud(clientSock, 2);
+            string to_send = leerTexto(clientSock, len);
+            int len_msg = obtenerLongitud(clientSock, 3);
+            string msg = leerTexto(clientSock, len_msg);
             string from = current_users_ids[clientSock];
 
-            cout << " Recibido del cliente ==> " << command_char << formatLength(len,2) << to_send << formatLength(len_msg,3) << msg << endl; // <-- LÍNEA AÑADIDA
+            cout << " Recibido del cliente ==> " << command_char << longitudFormato(len,2) << to_send << longitudFormato(len_msg,3) << msg << endl; // <-- LÍNEA AÑADIDA
 
             if (!current_users.count(to_send)){
                 string error_msg = "El nickname del destinatario no existe.";
-                string msg_error = string("E") + formatLength(error_msg.size(),3) + error_msg;
+                string msg_error = string("E") + longitudFormato(error_msg.size(),3) + error_msg;
                 cout << " Enviando al cliente ==> " << msg_error << endl; // <-- LÍNEA AÑADIDA
                 write(clientSock, msg_error.c_str(), msg_error.size());
             } else {
-                string msg_to_send = string("T") + formatLength(from.size(), 2) + from + formatLength(msg.size(),3) + msg;
+                string msg_to_send = string("T") + longitudFormato(from.size(), 2) + from + longitudFormato(msg.size(),3) + msg;
                 cout << " Enviando al cliente (" << to_send << ") ==> " << msg_to_send << endl; // <-- LÍNEA AÑADIDA
                 write(current_users[to_send], msg_to_send.c_str(), msg_to_send.size());
             }
@@ -251,29 +174,29 @@ void newClientThread(int clientSock) {
             cout << " Recibido del cliente ==> " << command_char << endl; // <-- LÍNEA AÑADIDA
             string msg = "";
             for(auto const &u : current_users){
-                msg += formatLength(u.first.size(), 2) + u.first;
+                msg += longitudFormato(u.first.size(), 2) + u.first;
             }
-            string msg_list = string("L") + formatLength(current_users.size(),2) + msg;
+            string msg_list = string("L") + longitudFormato(current_users.size(),2) + msg;
             cout << " Enviando al cliente ==> " << msg_list << endl; // <-- LÍNEA AÑADIDA
             write(clientSock, msg_list.c_str(), msg_list.size());
 
         } 
         
         else if (buffer[0] == 'f') { 
-            int len_to = get_len(clientSock, 2);
-            string to_send = read_text(clientSock, len_to);
-            int len_fname = get_len(clientSock, 3);
-            string fname = read_text(clientSock, len_fname);
-            int fsize = get_len(clientSock, 10);
-            string file_hash = read_text(clientSock, 64);
+            int len_to = obtenerLongitud(clientSock, 2);
+            string to_send = leerTexto(clientSock, len_to);
+            int len_fname = obtenerLongitud(clientSock, 3);
+            string fname = leerTexto(clientSock, len_fname);
+            int fsize = obtenerLongitud(clientSock, 10);
+            string file_hash = leerTexto(clientSock, 64);
             string from = current_users_ids[clientSock];
 
-            cout << " Recibido del cliente (cabecera) ==> " << command_char << formatLength(len_to,2) << to_send << formatLength(len_fname,3) << fname << formatLength(fsize,10) << file_hash << endl; // <-- LÍNEA AÑADIDA
+            cout << " Recibido del cliente (cabecera) ==> " << command_char << longitudFormato(len_to,2) << to_send << longitudFormato(len_fname,3) << fname << longitudFormato(fsize,10) << file_hash << endl; // <-- LÍNEA AÑADIDA
             cout << "Retransmitiendo archivo de " << from << " a " << to_send << endl;
 
             if (!current_users.count(to_send)) {
                 string error_msg = "El destinatario no existe.";
-                string msg_error = string("E") + formatLength(error_msg.size(),3) + error_msg;
+                string msg_error = string("E") + longitudFormato(error_msg.size(),3) + error_msg;
                 cout << " Enviando al cliente ==> " << msg_error << endl; // <-- LÍNEA AÑADIDA
                 write(clientSock, msg_error.c_str(), msg_error.size());
                 
@@ -287,9 +210,9 @@ void newClientThread(int clientSock) {
             } 
             
             else {
-                string header = string("F") + formatLength(from.size(),2) + from
-                            + formatLength(fname.size(),3) + fname
-                            + formatLength(fsize,10) + file_hash;
+                string header = string("F") + longitudFormato(from.size(),2) + from
+                            + longitudFormato(fname.size(),3) + fname
+                            + longitudFormato(fsize,10) + file_hash;
                 cout << " Enviando al cliente (cabecera) ==> " << header << endl; // <-- LÍNEA AÑADIDA
                 write(current_users[to_send], header.c_str(), header.size());
 
@@ -321,7 +244,7 @@ void newClientThread(int clientSock) {
             string currentChallengerNick;
 
             {
-                lock_guard<mutex> lock(tttMutex);
+                lock_guard<mutex> lock(tttMutexServer);
 
                 if (tttGame.active) {
                     if (clientSock == tttGame.playerO) {
@@ -329,7 +252,7 @@ void newClientThread(int clientSock) {
                     } else if (clientSock == tttGame.playerX) {
                         assignedRole = 'X';
                     } else {
-                        tttGame.spectators.insert(clientSock);
+                        tttGame.espectadores.insert(clientSock);
                         assignedRole = 'S';
                     }
                     sendBoardState = true;
@@ -341,19 +264,19 @@ void newClientThread(int clientSock) {
                         sendWaitingFlag = true;
                         waitingValue = '1';
                     } else {
-                        tttGame.spectators.insert(clientSock);
+                        tttGame.espectadores.insert(clientSock);
                         assignedRole = 'S';
                         sendInviteInfo = true;
                         currentChallengerNick = current_users_ids[tttGame.challengerSock];
                     }
                 } else {
-                    tttGame.resetBoard();
+                    tttGame.resetearTablero();
                     tttGame.playerO = clientSock;
                     tttGame.playerX = -1;
                     tttGame.challengerSock = clientSock;
                     tttGame.waitingForOpponent = true;
                     tttGame.turn = 'O';
-                    tttGame.spectators.clear();
+                    tttGame.espectadores.clear();
                     assignedRole = 'O';
                     sendWaitingFlag = true;
                     waitingValue = '1';
@@ -380,13 +303,13 @@ void newClientThread(int clientSock) {
 
             if (sendInviteInfo) {
                 int lenNick = static_cast<int>(currentChallengerNick.size());
-                string inviteMsg = string("S") + formatLength(lenNick, 2) + currentChallengerNick;
+                string inviteMsg = string("S") + longitudFormato(lenNick, 2) + currentChallengerNick;
                 write(clientSock, inviteMsg.c_str(), inviteMsg.size());
             }
 
             if (broadcastSearch) {
                 int lenNick = static_cast<int>(searchNick.size());
-                string inviteMsg = string("S") + formatLength(lenNick, 2) + searchNick;
+                string inviteMsg = string("S") + longitudFormato(lenNick, 2) + searchNick;
                 for (const auto& entry : current_users) {
                     write(entry.second, inviteMsg.c_str(), inviteMsg.size());
                 }
@@ -401,12 +324,12 @@ void newClientThread(int clientSock) {
             int playerXSock = -1;
             string boardSnapshot;
             char turnSnapshot = 'O';
-            vector<int> recipients;
+            vector<int> destinatarios;
             string hostNick;
             string opponentNick;
 
             {
-                lock_guard<mutex> lock(tttMutex);
+                lock_guard<mutex> lock(tttMutexServer);
 
                 if (!tttGame.waitingForOpponent || tttGame.challengerSock == clientSock || tttGame.playerX != -1) {
                     accepted = false;
@@ -415,17 +338,17 @@ void newClientThread(int clientSock) {
                     tttGame.waitingForOpponent = false;
                     tttGame.active = true;
                     tttGame.turn = 'O';
-                    tttGame.resetBoard();
-                    tttGame.spectators.clear();
+                    tttGame.resetearTablero();
+                    tttGame.espectadores.clear();
                     for (const auto& entry : current_users) {
                         if (entry.second != tttGame.playerO && entry.second != tttGame.playerX) {
-                            tttGame.spectators.insert(entry.second);
+                            tttGame.espectadores.insert(entry.second);
                         }
                     }
 
                     boardSnapshot = tttBoardString(tttGame.board);
                     turnSnapshot = tttGame.turn;
-                    recipients = gatherTTTRecipientsLocked(tttGame);
+                    destinatarios = reunirTTTDestinatariosBloqueados(tttGame);
                     playerOSock = tttGame.playerO;
                     playerXSock = tttGame.playerX;
                     hostNick = current_users_ids[playerOSock];
@@ -457,16 +380,16 @@ void newClientThread(int clientSock) {
                 write(playerXSock, roleMsgX.c_str(), roleMsgX.size());
             }
 
-            if (!recipients.empty()) {
+            if (!destinatarios.empty()) {
                 string boardMsg = string("B") + boardSnapshot;
                 string turnMsg = string("U") + turnSnapshot;
-                tttBroadcast(recipients, boardMsg);
-                tttBroadcast(recipients, turnMsg);
+                tttBroadcast(destinatarios, boardMsg);
+                tttBroadcast(destinatarios, turnMsg);
             }
 
             int lenHost = static_cast<int>(hostNick.size());
             int lenOpp = static_cast<int>(opponentNick.size());
-            string startMsg = string("G") + formatLength(lenHost, 2) + hostNick + formatLength(lenOpp, 2) + opponentNick;
+            string startMsg = string("G") + longitudFormato(lenHost, 2) + hostNick + longitudFormato(lenOpp, 2) + opponentNick;
             for (const auto& entry : current_users) {
                 write(entry.second, startMsg.c_str(), startMsg.size());
             }
@@ -491,14 +414,14 @@ void newClientThread(int clientSock) {
             char roleChar = '?';
             string boardSnapshot;
             char nextTurn = 'O';
-            vector<int> recipients;
+            vector<int> destinatarios;
             bool endGame = false;
             char endReason = ' ';
             int playerOSock = -1;
             int playerXSock = -1;
 
             {
-                lock_guard<mutex> lock(tttMutex);
+                lock_guard<mutex> lock(tttMutexServer);
 
                 if (tttGame.playerO == clientSock) {
                     roleChar = 'O';
@@ -514,22 +437,22 @@ void newClientThread(int clientSock) {
                     validMove = true;
                     tttGame.board[position] = roleChar;
                     boardSnapshot = tttBoardString(tttGame.board);
-                    recipients = gatherTTTRecipientsLocked(tttGame);
+                    destinatarios = reunirTTTDestinatariosBloqueados(tttGame);
 
-                    if (tttCheckWin(tttGame.board, roleChar)) {
+                    if (tttVerificarGanar(tttGame.board, roleChar)) {
                         win = true;
                         endGame = true;
                         endReason = 'W';
                         playerOSock = tttGame.playerO;
                         playerXSock = tttGame.playerX;
-                        tttGame.resetSession();
-                    } else if (tttBoardFull(tttGame.board)) {
+                        tttGame.resetearSesion();
+                    } else if (tttTableroFull(tttGame.board)) {
                         draw = true;
                         endGame = true;
                         endReason = 'D';
                         playerOSock = tttGame.playerO;
                         playerXSock = tttGame.playerX;
-                        tttGame.resetSession();
+                        tttGame.resetearSesion();
                     } else {
                         tttGame.turn = (tttGame.turn == 'O') ? 'X' : 'O';
                         nextTurn = tttGame.turn;
@@ -544,19 +467,19 @@ void newClientThread(int clientSock) {
 
             if (validMove) {
                 string boardMsg = string("B") + boardSnapshot;
-                tttBroadcast(recipients, boardMsg);
+                tttBroadcast(destinatarios, boardMsg);
 
                 if (win) {
                     string winMsg = string("W") + roleChar;
-                    tttBroadcast(recipients, winMsg);
+                    tttBroadcast(destinatarios, winMsg);
                 } else if (draw) {
                     string drawMsg = "D";
-                    tttBroadcast(recipients, drawMsg);
+                    tttBroadcast(destinatarios, drawMsg);
                 }
 
                 if (announceNextTurn) {
                     string turnMsg = string("U") + nextTurn;
-                    tttBroadcast(recipients, turnMsg);
+                    tttBroadcast(destinatarios, turnMsg);
                 }
                 if (endGame) {
                     if (playerOSock != -1) {
@@ -568,7 +491,7 @@ void newClientThread(int clientSock) {
                         write(playerXSock, roleReset.c_str(), roleReset.size());
                     }
                     string endMsg = string("E") + endReason;
-                    tttBroadcast(recipients, endMsg);
+                    tttBroadcast(destinatarios, endMsg);
                 }
             }
         }
@@ -576,7 +499,7 @@ void newClientThread(int clientSock) {
         else if (buffer[0] == 'x') {
             cout << " Recibido del cliente ==> " << command_char << endl; // <-- LÍNEA AÑADIDA
             cout << "\n[Usuario se ha desconectado: " << current_users_ids[clientSock] << "]" << endl;
-            removeFromTTT(clientSock);
+            eliminarDeTTT(clientSock);
             current_users.erase(current_users_ids[clientSock]);
             current_users_ids.erase(clientSock);
             shutdown(clientSock, SHUT_RDWR);
@@ -587,8 +510,8 @@ void newClientThread(int clientSock) {
         else if (buffer[0] == 'o') { 
             /*
             string from = current_users_ids[clientSock];
-            int len_to = get_len(clientSock, 2);
-            string to_send = read_text(clientSock, len_to);
+            int len_to = obtenerLongitud(clientSock, 2);
+            string to_send = leerTexto(clientSock, len_to);
 
             cout << "\nRecibido comando de objeto binario de [" << from << "] para [" << to_send << "]" << endl;
             
@@ -623,7 +546,7 @@ void newClientThread(int clientSock) {
                 
                 // Protocolo: 'O' + [len_from(2)] + [from_user] + [datos binarios...]
                 char command = 'O';
-                string from_msg = formatLength(from.size(), 2) + from;
+                string from_msg = longitudFormato(from.size(), 2) + from;
 
                 cout << "Enviando objeto a [" << to_send << "] ==> " << command << from_msg << "[...datos binarios...]" << endl;
 
