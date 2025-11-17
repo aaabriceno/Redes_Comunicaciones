@@ -1,0 +1,37 @@
+Había una vez un estudiante de Ciencias de la Computación que pasaba más tiempo peleándose con sus sockets que durmiendo. 
+Se llamaba Anthony y estaba haciendo un protocolo confiable sobre UDP, algo así como un RDT casero, sin timeouts pero con verificación de duplicados.
+
+Una noche, mientras probaba su programa, decidió que ya no quería usar simples frases cortas para sus pruebas. 
+Necesitaba un archivo más grande, algo que pudiera fragmentarse en varios segmentos de 777 bytes, 
+para ver si su lógica de reensamblado funcionaba correctamente en el cliente y en el servidor.
+
+Entonces creó un archivo llamado main.txt y escribió dentro una pequeña historia sobre paquetes viajando por la red.
+En esta historia, los paquetes no eran simples grupos de bytes, sino pequeñas criaturas luminosas que corrían por cables de cobre y fibras ópticas. 
+Cada paquete llevaba en su interior un número de secuencia y una parte de un mensaje más grande. 
+Si algún router los retrasaba, ellos se ponían nerviosos, pero seguían avanzando, porque sabían que al final del camino 
+un servidor paciente los estaba esperando para reordenarlos y reconstruir el mensaje original.
+
+Uno de esos paquetes se llamaba P0, y era el primero de todos. 
+Estaba muy orgulloso porque llevaba la cabecera inicial y el comienzo del cuento. 
+Detrás de él venían P1, P2, P3 y muchos más, cada uno con su propio fragmento. 
+Algunos se adelantaban, otros se quedaban un poco atrás, pero el protocolo de Anthony era lo bastante inteligente como para acomodarlos 
+en la posición correcta cuando todos llegaran a destino.
+
+Sin embargo, un día apareció un viejo router gruñón que, por error, duplicó a P2 y lo envió dos veces. 
+El servidor, gracias al campo de número de secuencia y a la verificación de duplicados, detectó que ese P2 repetido 
+no debía volver a insertarse en el mensaje reconstruido. 
+“Lo siento, paquete duplicado”, dijo el servidor. “Tu intención es buena, pero ya te he visto antes”. 
+P2 se encogió de hombros (si es que un paquete puede encogerse de hombros) y desapareció tranquilamente en el buffer descartado.
+
+Anthony, al mirar los logs en su consola, sonrió. 
+Su implementación funcionaba: los fragmentos mayores a 777 bytes se dividían correctamente, 
+los duplicados eran detectados y el mensaje final se rearmaba sin errores. 
+Entonces decidió agregar más texto a su archivo de prueba, para asegurarse de que sus vectores y sus bucles funcionaran incluso con historias más largas.
+
+Siguió escribiendo sobre redes, sobre amigos que se conectaban desde otros países, sobre traceroutes llenos de saltos misteriosos 
+y sobre cómo, a pesar de toda la complejidad, al final siempre había un cliente y un servidor intentando entenderse. 
+Y así, mientras el mundo dormía, Anthony se quedó un rato más probando su programa, feliz de ver 
+cómo cada pequeño paquete encontraba su lugar en la historia completa.
+
+Fin (pero solo de este cuento, no de tus pruebas con UDP, RDT y fragmentación). 
+Sigue experimentando, capturando paquetes y leyendo hexadecimales, porque en cada bit hay otra historia que contar.

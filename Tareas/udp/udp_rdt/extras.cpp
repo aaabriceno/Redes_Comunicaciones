@@ -7,6 +7,7 @@
 #include <fstream>
 #include <chrono>
 #include <unordered_map>
+#include <cerrno>
 
 #include <unistd.h>        // read, write, close, sendto, recvfrom
 #include <sys/types.h>     // tipos de socket
@@ -190,8 +191,8 @@ bool rdt_send(UDP_Socket* udp,
             const sockaddr_in* dest,
             const vector<char>& payload,
             RDTState& state,
-            uint32_t timeoutMs,
-            unsigned maxRetries,
+            uint32_t /*timeoutMs*/,
+            unsigned /*maxRetries*/,
             bool verbose){
     RDTHeader hdr {};
     hdr.type = RDT_TYPE_DATA;
@@ -204,61 +205,34 @@ bool rdt_send(UDP_Socket* udp,
     write_header(packet,hdr);
     packet.insert(packet.end(), payload.begin(), payload.end());
 
-    for (unsigned attempt = 0; attempt < maxRetries; ++attempt){
-        if(verbose){
-            cout << "[RDT] send seq=" << int(hdr.seq)
-                 << " len=" << hdr.length
-                 << " try=" << attempt + 1 << endl;
-        }
-
-        ssize_t sent = sendto(udp->sockfd, packet.data(), packet.size(), 0,
-                            reinterpret_cast<const sockaddr*> (dest),
-                            sizeof(*dest));
-        
-        if (sent < 0){
-            perror("[RDT] sendto");
-            return false;
-        }
-
-        fd_set readfds;
-        FD_ZERO(&readfds);
-        FD_SET(udp->sockfd, &readfds);
-
-        timeval tv{};
-        tv.tv_sec  = timeoutMs / 1000;
-        tv.tv_usec = (timeoutMs % 1000) * 1000;
-
-        int ready = select(udp->sockfd + 1, &readfds, nullptr, nullptr,
-                           timeoutMs ? &tv : nullptr);
-
-        if (ready <= 0) {
-            // timeout o error -> reintentar
-            continue;
-        }
-
-        vector<char> ackBuf(sizeof(RDTHeader) + 16);
-        sockaddr_in ackAddr;
-        socklen_t addrLen = sizeof(ackAddr);
-        ssize_t rec = recvfrom(udp->sockfd, ackBuf.data(), ackBuf.size(), 0,
-                               reinterpret_cast<sockaddr*>(&ackAddr), &addrLen);
-        if (rec < static_cast<ssize_t>(sizeof(RDTHeader))) {
-            continue;
-        }
-
-        ackBuf.resize(static_cast<size_t>(rec));
-        RDTHeader ackHdr{};
-        if (!parse_header(ackBuf, ackHdr)) continue;
-        if (ackHdr.type != RDT_TYPE_ACK || ackHdr.seq != state.sendSeq) continue;
-
-        // ack válido recibido
-        state.sendSeq ^= 1;
-        state.lastAck = ackHdr.seq;
-        return true;
+    if(verbose){
+        cout << "[RDT] send seq=" << int(hdr.seq)
+             << " len=" << hdr.length << endl;
     }
-
-    cerr << "[RDT] exceeded retries for seq "
-              << int(state.sendSeq) << endl;
-    return false;
+    ssize_t sent = sendto(udp->sockfd, packet.data(), packet.size(), 0,
+                        reinterpret_cast<const sockaddr*> (dest),
+                        sizeof(*dest));
+    if (sent < 0){
+        perror("[RDT] sendto");
+        return false;
+    }
+    // Esperar un solo ACK (sin timeout ni reintentos)
+    vector<char> ackBuf(sizeof(RDTHeader) + 16);
+    sockaddr_in ackAddr;
+    socklen_t addrLen = sizeof(ackAddr);
+    ssize_t rec = recvfrom(udp->sockfd, ackBuf.data(), ackBuf.size(), 0,
+                           reinterpret_cast<sockaddr*>(&ackAddr), &addrLen);
+    if (rec < static_cast<ssize_t>(sizeof(RDTHeader))) {
+        return false;
+    }
+    ackBuf.resize(static_cast<size_t>(rec));
+    RDTHeader ackHdr{};
+    if (!parse_header(ackBuf, ackHdr)) return false;
+    if (ackHdr.type != RDT_TYPE_ACK || ackHdr.seq != state.sendSeq) return false;
+    // ack válido recibido
+    state.sendSeq ^= 1;
+    state.lastAck = ackHdr.seq;
+    return true;
 } 
 
 
@@ -267,68 +241,67 @@ bool rdt_recv(UDP_Socket* udp,
               sockaddr_in* sender,
               RDTState& state,
               uint32_t timeoutMs) {
-
-    fd_set readfds;
-    fd_set master;
-    FD_ZERO(&master);
-    FD_SET(udp->sockfd, &master);
+    // RDT agrega su propio encabezado, por lo que un payload de tamaño MAXLINE
+    // termina produciendo un datagrama un poco más grande. Reservamos espacio
+    // extra para no truncar el último fragmento de un archivo grande.
+    vector<char> buffer(MAXLINE + sizeof(RDTHeader));
+    socklen_t len = sizeof(*sender);
 
     while (true) {
-        readfds = master;
-        timeval tv{};
-        timeval* tvPtr = nullptr;
-        if (timeoutMs) {
-            tv.tv_sec  = timeoutMs / 1000;
+        if (timeoutMs > 0) {
+            fd_set readfds;
+            FD_ZERO(&readfds);
+            FD_SET(udp->sockfd, &readfds);
+
+            timeval tv;
+            tv.tv_sec = timeoutMs / 1000;
             tv.tv_usec = (timeoutMs % 1000) * 1000;
-            tvPtr = &tv;
+
+            int ready = select(udp->sockfd + 1, &readfds, nullptr, nullptr, &tv);
+            if (ready < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                return false;
+            } else if (ready == 0) {
+                return false;  // timeout
+            }
         }
 
-        int ready = select(udp->sockfd + 1, &readfds, nullptr, nullptr, tvPtr);
-        if (ready <= 0) {
-            return false; // timeout o error
-        }
-
-        vector<char> buffer(MAXLINE);
-        socklen_t len = sizeof(*sender);
         ssize_t rec = recvfrom(udp->sockfd, buffer.data(), buffer.size(), 0,
                                reinterpret_cast<sockaddr*>(sender), &len);
         if (rec < static_cast<ssize_t>(sizeof(RDTHeader))) {
-            continue;
+            return false;
         }
         buffer.resize(static_cast<size_t>(rec));
-
-        RDTHeader hdr{};
-        if (!parse_header(buffer, hdr)) {
-            continue;
-        }
-
-        vector<char> data(buffer.begin() + sizeof(RDTHeader),
-                               buffer.begin() + sizeof(RDTHeader) + hdr.length);
-        uint16_t calc = rdt_checksum(hdr, data);
-        if (calc != hdr.checksum) {
-            // corrupción -> reenviar último ACK válido
-            send_ack(udp, sender, state.lastAck);
-            continue;
-        }
-
-        if (hdr.type == RDT_TYPE_ACK) {
-            // ACK recibido por accidente aquí -> ignorar; lo manejará rdt_send
-            continue;
-        }
-
-        // DATA
-        if (hdr.seq != state.expectedSeq) {
-            // duplicado -> reenvío último ACK
-            send_ack(udp, sender, state.lastAck);
-            continue;
-        }
-
-        payload = move(data);
-        state.lastAck = hdr.seq;
-        send_ack(udp, sender, hdr.seq);
-        state.expectedSeq ^= 1;
-        return true;
+        break;
     }
+
+    RDTHeader hdr{};
+    if (!parse_header(buffer, hdr)) {
+        return false;
+    }
+
+    vector<char> data(buffer.begin() + sizeof(RDTHeader),
+                      buffer.begin() + sizeof(RDTHeader) + hdr.length);
+    uint16_t calc = rdt_checksum(hdr, data);
+    if (calc != hdr.checksum) {
+        // corrupción -> reenviar último ACK válido
+        send_ack(udp, sender, state.lastAck);
+        return false;
+    }
+
+    if (hdr.type == RDT_TYPE_ACK) {
+        // ACK recibido por accidente aquí -> ignorar; lo manejará rdt_send
+        return false;
+    }
+
+    // DATA (aceptar siempre, sin control de duplicados)
+    payload = move(data);
+    state.lastAck = hdr.seq;
+    send_ack(udp, sender, hdr.seq);
+    state.expectedSeq ^= 1;
+    return true;
 }
 
 // -------------- FUNCIONES object --------------
@@ -469,9 +442,9 @@ void sendFile(UDP_Socket *udp, const string propietario, const sockaddr_in &serv
     int i = 0;
     streamsize total_enviado = 0;
     
-    while (true) {
-        vector<char> chunk(MAXLINE-header.size());
-        archivo.read(chunk.data(), MAXLINE-header.size());
+    while (total_enviado < fsize) {
+        vector<char> chunk(MAXLINE - header.size());
+        archivo.read(chunk.data(), MAXLINE - header.size());
         streamsize readed = archivo.gcount();
         if (readed <= 0) break;
 
@@ -483,6 +456,14 @@ void sendFile(UDP_Socket *udp, const string propietario, const sockaddr_in &serv
 
         vector<char> datagram(header.begin(), header.end());
         datagram.insert(datagram.end(), chunk.begin(), chunk.begin() + readed);
+
+        // Si es el último fragmento, rellenar con '#'
+        if (total_enviado + readed >= fsize) {
+            size_t faltan = MAXLINE - datagram.size();
+            if (faltan > 0) {
+                datagram.insert(datagram.end(), faltan, '#');
+            }
+        }
 
         udp_enviar(udp, datagram, &serverAddr, false);
 
@@ -498,7 +479,7 @@ void sendFile(UDP_Socket *udp, const string propietario, const sockaddr_in &serv
     archivo.close();
 }
 
-void receiveFile(string buffer) {
+FileReceiveEvent receiveFile(string buffer) {
     int len_to = obtener_longitud(buffer, 2);
     string to_nick = read_text(buffer, len_to);
 
@@ -516,7 +497,7 @@ void receiveFile(string buffer) {
             fname, {}, static_cast<size_t>(total_size), 0
         };
 
-        cout << "\n[UDP] Begin reception of file '" << fname
+        cout << "\n[UDP] Inicio de recepción del archivo '" << fname
                   << "' (" << total_size << " bytes)" << endl;
     }
 
@@ -530,24 +511,30 @@ void receiveFile(string buffer) {
         f.chunks[pos] = move(data);
         f.received_bytes += f.chunks[pos].size();
 
-        cout << " Fragment " << pos
-                  << " received (" << f.chunks[pos].size() << " bytes)"
+        cout << " Fragmento " << pos
+                  << " recibido (" << f.chunks[pos].size() << " bytes)"
                   << "  [" << f.received_bytes << "/" << f.total_size << "]\n";
     }
 
     if (f.received_bytes >= f.total_size) {
         ofstream out(key, ios::binary);
-
         for (size_t i = 0; i < f.chunks.size(); ++i) {
-            if (!f.chunks[i].empty())
-                out.write(f.chunks[i].data(), f.chunks[i].size());
+            if (!f.chunks[i].empty()) {
+                // Si es el último fragmento, quitar los '#' al final
+                if (i == f.chunks.size() - 1) {
+                    auto& last = f.chunks[i];
+                    while (!last.empty() && last.back() == '#') last.pop_back();
+                    out.write(last.data(), last.size());
+                } else {
+                    out.write(f.chunks[i].data(), f.chunks[i].size());
+                }
+            }
         }
-
         out.close();
-
-        cout << "\n[UDP] File received completely: "
+        cout << "\n[UDP] Archivo recibido completamente: "
                   << f.fname << " (" << f.received_bytes << " bytes)\n";
-
         udp_active_files.erase(key);
+        return FileReceiveEvent::Completed;
     }
+    return FileReceiveEvent::Fragment;
 }

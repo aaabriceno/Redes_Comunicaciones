@@ -31,13 +31,17 @@ bool waitingResponse = false;  // Si está esperando una respuesta Y/N de invita
 
 RDTState clientRdtState;
 mutex clientSendMutex;
+mutex clientRecvMutex;  // sincroniza lecturas del socket
+bool receivingFile = false;
 
 bool reliableSend(const vector <char>& payload, bool verbose = false){
-    lock_guard<mutex> guard(clientSendMutex);
+    lock_guard<mutex> sendGuard(clientSendMutex);
+    lock_guard<mutex> recvGuard(clientRecvMutex);
     return rdt_send(&client, &serverAddr, payload, clientRdtState, 500, 5, verbose);
 }
 
 bool reliableReceive(vector<char>& payload, uint32_t timeoutMs = 0){
+    lock_guard<mutex> recvGuard(clientRecvMutex);
     sockaddr_in sender = serverAddr;
     return rdt_recv(&client, payload, &sender, clientRdtState, timeoutMs);
 }
@@ -126,7 +130,10 @@ void readThread() {
     vector<char> data;
     
     while (true) {
-        if (!reliableReceive(data)) continue;
+        if (!reliableReceive(data, 50)) {
+            usleep(1000);
+            continue;
+        }
 
         string buffer(data.begin(), data.end());
         string buff = read_text(buffer, 1);
@@ -159,7 +166,12 @@ void readThread() {
 
         } else if (buff[0] == 'F') {
             // Recepción de archivo
-            receiveFile(buffer);
+            FileReceiveEvent evt = receiveFile(buffer);
+            if (evt == FileReceiveEvent::Fragment) {
+                receivingFile = true;
+            } else if (evt == FileReceiveEvent::Completed) {
+                receivingFile = false;
+            }
 
         } else if(buff[0] == 'O') {
             // Recepción de objeto
@@ -257,7 +269,7 @@ void readThread() {
         }
 
         // Mostrar menú solo si NO estamos en juego y NO esperando respuesta Y/N
-        if (!inGame && !waitingResponse) {
+        if (!inGame && !waitingResponse && !receivingFile) {
             showMenu();
         } else if (inGame) {
             // Si estamos en juego, solo mostrar prompt simple

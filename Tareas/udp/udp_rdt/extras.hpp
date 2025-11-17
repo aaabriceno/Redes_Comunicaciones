@@ -184,6 +184,11 @@ struct FilePart {
 
 void receiveMochila(string& buffer);
 void sendFile(UDP_Socket *udp, const string propietario, const sockaddr_in &serverAddr);
-void receiveFile(std::string buffer);
+enum class FileReceiveEvent {
+    Fragment,
+    Completed
+};
+
+FileReceiveEvent receiveFile(std::string buffer);
 
 #endif
